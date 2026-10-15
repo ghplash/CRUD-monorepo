@@ -5,31 +5,38 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/go-playground/validator"
 	"github.com/labstack/echo/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {
 	e := echo.New()
+	e.Validator = &CustomValidator{validator: validator.New()}
 	e.GET("/getUsers", GETUser)
 	e.POST("/postUsers", POSTUser)
+	e.Start(":5050")
 }
 
 // Struct and slice with data
 
 type ReqisterData struct {
-	Name     string `json:"name" validate:"required"`
-	Password string `json:"password" validate:"required"`
-	Role     string `json:"role" validate:"required,onof=admin user"`
+	Name     string `json:"name"`
+	Password string `json:"password"`
+	Role     string `json:"role" validate:"required,oneof=admin user"`
 }
 
 type Users struct {
-	UserInput ReqisterData
-	ID        int
-	Login     string
+	ReqisterData
+	ID    int
+	Login string
 }
 
 var userMap = make(map[int]Users)
+
+type CustomValidator struct {
+	validator *validator.Validate
+}
 
 // Struct for answer
 
@@ -49,7 +56,7 @@ func GETUser(c *echo.Context) error {
 	if err := c.Bind(&users); err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad JSON"})
 	}
-	if users.UserInput.Role == "admin" {
+	if users.Role == "admin" {
 		return c.JSON(http.StatusOK, AnswerToUsers{Users: userMap})
 	} else {
 		return c.JSON(http.StatusOK, AnswerToUsers{You: users})
@@ -61,13 +68,13 @@ func POSTUser(c *echo.Context) error {
 	if err := c.Bind(&user); err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad JSON"})
 	}
-	if err := c.Validate(&user.UserInput); err != nil {
-		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Role can only be 'user' or 'admin'"})
+	if err := c.Validate(&user); err != nil {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: err.Error()})
 	}
-	id := rand.IntN(90000000) + 100000000
+	id := rand.IntN(90000000)
 	user.ID = id
 
-	userLog, err := hashPassword(user.UserInput.Password)
+	userLog, err := hashPassword(user.Password)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Could not get a login"})
 	}
@@ -87,11 +94,11 @@ func PATCHUserName(c *echo.Context) error {
 		return c.JSON(http.StatusNotFound, AnswerForErrors{Error: "User not found, first, reqister"})
 	}
 	login := c.Param("login")
-	if !checkLogin(login, user.UserInput.Password) {
+	if !checkLogin(login, user.Password) {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: ""})
 	}
 	name := c.Param("name")
-	user.UserInput.Name = name
+	user.Name = name
 	return c.JSON(http.StatusOK, AnswerToUsers{You: user})
 }
 
@@ -105,4 +112,11 @@ func hashPassword(password string) (string, error) {
 func checkLogin(login string, password string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(login), []byte(password))
 	return err == nil
+}
+
+func (cv *CustomValidator) Validate(i interface{}) error {
+	if err := cv.validator.Struct(i); err != nil {
+		return err
+	}
+	return nil
 }
