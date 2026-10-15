@@ -28,8 +28,12 @@ type ReqisterData struct {
 
 type Users struct {
 	ReqisterData
-	ID    int
-	Login string
+	ID int
+}
+
+type UpgORDelUserRequest struct {
+	Login string `json:"login"`
+	Name  string `json:"name"`
 }
 
 var userMap = make(map[int]Users)
@@ -41,8 +45,11 @@ type CustomValidator struct {
 // Struct for answer
 
 type AnswerToUsers struct {
-	Users map[int]Users
-	You   Users
+	Users     map[int]Users
+	You       Users
+	YourLogin string
+	YourID    int
+	Message   string
 }
 
 type AnswerForErrors struct {
@@ -78,9 +85,8 @@ func POSTUser(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Could not get a login"})
 	}
-	user.Login = userLog
 	userMap[id] = user
-	return c.JSON(http.StatusOK, AnswerToUsers{You: user})
+	return c.JSON(http.StatusOK, AnswerToUsers{YourLogin: userLog, YourID: id, Message: "You were successfully register"})
 }
 
 func PATCHUserName(c *echo.Context) error {
@@ -89,23 +95,48 @@ func PATCHUserName(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad id"})
 	}
+	var upgUser UpgORDelUserRequest
+	if err := c.Bind(&upgUser); err != nil {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad JSON"})
+	}
+
 	user, exist := userMap[id]
 	if !exist {
 		return c.JSON(http.StatusNotFound, AnswerForErrors{Error: "User not found, first, reqister"})
 	}
-	login := c.Param("login")
-	if !checkLogin(login, user.Password) {
-		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: ""})
+
+	if ok := checkLogin(upgUser.Login, user.Password); !ok {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Incorrect login"})
 	}
-	name := c.Param("name")
-	user.Name = name
-	return c.JSON(http.StatusOK, AnswerToUsers{You: user})
+
+	user.Name = upgUser.Name
+	return c.JSON(http.StatusOK, AnswerToUsers{You: user, Message: "Name was successfully updated"})
+}
+
+func DELETEUser(c *echo.Context) error {
+	idParam := c.Param("id")
+	id, err := strconv.Atoi(idParam)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad id"})
+	}
+
+	if _, exist := userMap[id]; !exist {
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Error: "User not found, first, reqister"})
+	}
+
+	var delUser UpgORDelUserRequest
+	if err := c.Bind(&delUser); err != nil {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad JSON"})
+	}
+	delete(userMap, id)
+
+	return c.JSON(http.StatusOK, AnswerToUsers{Message: "User was successfully deleted"})
 }
 
 // Other func
 
 func hashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 16)
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 8)
 	return string(bytes), err
 }
 
