@@ -1,16 +1,26 @@
 package main
 
 import (
+	"database/sql"
+	"log"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
 
 	"github.com/go-playground/validator"
+	_ "github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {
+	// Adding PostgreSQL Database
+	dsn := "postgres://postgres:647tryGoewers@localhost:5432/postgres"
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		log.Fatalf("Error with configuration of databse", err)
+	}
+	defer db.Close()
 	e := echo.New()
 	e.Validator = &CustomValidator{validator: validator.New()}
 	e.GET("/getUsers", GETUser)
@@ -19,7 +29,7 @@ func main() {
 }
 
 // Struct and slice with data
-
+// User struct
 type ReqisterData struct {
 	Name     string `json:"name"`
 	Password string `json:"password"`
@@ -31,13 +41,24 @@ type Users struct {
 	ID int
 }
 
-type UpgORDelUserRequest struct {
+type UserRequest struct {
 	Login string `json:"login"`
 	Name  string `json:"name"`
 }
 
 var userMap = make(map[int]Users)
 
+// Message struct
+type Message struct {
+	IdUserFrom    int    `json:"idFrom"`
+	LoginUserFrom string `json:"loginFrom"`
+	IdUserTo      int    `json:"idTo"`
+	Text          string `json:"text"`
+}
+
+var messagesMap = make(map[int]Message)
+
+// Other struct
 type CustomValidator struct {
 	validator *validator.Validate
 }
@@ -56,7 +77,7 @@ type AnswerForErrors struct {
 	Error string
 }
 
-// Main CRUD func
+// Main CRUD User func
 
 func GETUser(c *echo.Context) error {
 	var users Users
@@ -95,7 +116,7 @@ func PATCHUserName(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad id"})
 	}
-	var upgUser UpgORDelUserRequest
+	var upgUser UserRequest
 	if err := c.Bind(&upgUser); err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad JSON"})
 	}
@@ -124,13 +145,38 @@ func DELETEUser(c *echo.Context) error {
 		return c.JSON(http.StatusNotFound, AnswerForErrors{Error: "User not found, first, reqister"})
 	}
 
-	var delUser UpgORDelUserRequest
+	var delUser UserRequest
 	if err := c.Bind(&delUser); err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad JSON"})
 	}
 	delete(userMap, id)
 
 	return c.JSON(http.StatusOK, AnswerToUsers{Message: "User was successfully deleted"})
+}
+
+//Main Messages func
+
+func GETMessages(c *echo.Context) error {
+	idParam := c.Param("id")
+	id, err := strconv.Atoi(idParam)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad id"})
+	}
+
+	user, exist := userMap[id]
+	if !exist {
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Error: "No User with required ID"})
+	}
+
+	var userData UserRequest
+	if err := c.Bind(&userData); err != nil {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad JSON"})
+	}
+
+	if ok := checkLogin(userData.Login, user.Password); !ok {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad login"})
+	}
+
 }
 
 // Other func
