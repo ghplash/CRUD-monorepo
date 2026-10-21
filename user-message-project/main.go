@@ -8,24 +8,66 @@ import (
 	"strconv"
 
 	"github.com/go-playground/validator"
-	_ "github.com/jackc/pgx/v5"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/labstack/echo/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {
 	// Adding PostgreSQL Database
-	dsn := "postgres://postgres:647tryGoewers@localhost:5432/postgres"
+	dsn := "postgres://postgres:647tryGoewers@localhost:5432/user_message_db?sslmode=disable"
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		log.Fatalf("Error with configuration of databse", err)
+		log.Fatalf("Error with configuration of databse: %v", err)
 	}
 	defer db.Close()
+
+	if err := db.Ping(); err != nil {
+		log.Fatalf("Error with connection db: %v", err)
+	}
+
+	log.Println("Database successfully work")
+	// Main SQL query
+	query := `
+	CREATE TABLE IF NOT EXISTS users (
+		id INT NOT NULL,
+		password VARCHAR NOT NULL,
+		role BOOL
+	)`
+	_, err = db.Exec(query)
+	if err != nil {
+		log.Fatalf("Error with creating User table: %v", err)
+	}
+
+	log.Println("User table was successfully created!")
+
+	query = `
+	CREATE TABLE IF NOT EXISTS messages (
+		idUserFrom INT,
+		loginUserFrom VARCHAR,
+		idUserTo INT,
+		text VARCHAR,
+		when_send TIME
+	)`
+	if _, err = db.Exec(query); err != nil {
+		log.Fatalf("Error with creating Messages table: %v", err)
+	}
+
+	log.Println("Messages table was successfully created!")
+
+	// Processing of connections, Grouping, and Validation
 	e := echo.New()
-	e.Validator = &CustomValidator{validator: validator.New()}
-	e.GET("/getUsers", GETUser)
-	e.POST("/postUsers", POSTUser)
+	api := e.Group("/api")
+	{
+		api.GET("/users", GETUser)
+		api.POST("/users", POSTUser)
+		api.PATCH("/update_user_name/:id", PATCHUserName)
+		api.DELETE("/user_delete", DELETEUser)
+	}
+
 	e.Start(":5050")
+
+	e.Validator = &CustomValidator{validator: validator.New()}
 }
 
 // Struct and slice with data
@@ -80,6 +122,9 @@ type AnswerForErrors struct {
 // Main CRUD User func
 
 func GETUser(c *echo.Context) error {
+	if c.Request().Method != "GET" {
+		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Error: "Can't be method exept GET"})
+	}
 	var users Users
 	if err := c.Bind(&users); err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad JSON"})
@@ -92,6 +137,9 @@ func GETUser(c *echo.Context) error {
 }
 
 func POSTUser(c *echo.Context) error {
+	if c.Request().Method != "POST" {
+		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Error: "Can't be method exept POST"})
+	}
 	var user Users
 	if err := c.Bind(&user); err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad JSON"})
@@ -111,6 +159,9 @@ func POSTUser(c *echo.Context) error {
 }
 
 func PATCHUserName(c *echo.Context) error {
+	if c.Request().Method != "PATCH" {
+		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Error: "Can't be method exept PATCH"})
+	}
 	idParam := c.Param("id")
 	id, err := strconv.Atoi(idParam)
 	if err != nil {
@@ -135,6 +186,9 @@ func PATCHUserName(c *echo.Context) error {
 }
 
 func DELETEUser(c *echo.Context) error {
+	if c.Request().Method != "DELETE" {
+		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Error: "Can't be method exept DELETE"})
+	}
 	idParam := c.Param("id")
 	id, err := strconv.Atoi(idParam)
 	if err != nil {
@@ -157,6 +211,9 @@ func DELETEUser(c *echo.Context) error {
 //Main Messages func
 
 func GETMessages(c *echo.Context) error {
+	if c.Request().Method != "GET" {
+		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Error: "Can't be method exept GET"})
+	}
 	idParam := c.Param("id")
 	id, err := strconv.Atoi(idParam)
 	if err != nil {
@@ -176,7 +233,7 @@ func GETMessages(c *echo.Context) error {
 	if ok := checkLogin(userData.Login, user.Password); !ok {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad login"})
 	}
-
+	return c.JSON(http.StatusOK, AnswerToUsers{Message: "Hello"})
 }
 
 // Other func
