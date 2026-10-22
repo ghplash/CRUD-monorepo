@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/go-playground/validator"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/labstack/echo/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -28,26 +27,34 @@ func main() {
 
 	log.Println("Database successfully work")
 	// Main SQL query
+
+	// Creating users table
+
 	query := `
 	CREATE TABLE IF NOT EXISTS users (
-		id INT NOT NULL,
+		id INT PRIMARY KEY,
+		username VARCHAR(50) UNIQUE,
 		password VARCHAR NOT NULL,
-		role BOOL
+		role BOOL DEFAULT false
 	)`
 	_, err = db.Exec(query)
 	if err != nil {
 		log.Fatalf("Error with creating User table: %v", err)
 	}
 
-	log.Println("User table was successfully created!")
+	log.Println("Users table was successfully created!")
+
+	// Creating messages table
 
 	query = `
 	CREATE TABLE IF NOT EXISTS messages (
+		messageId SERIAL PRIMARY KEY,
 		idUserFrom INT,
-		loginUserFrom VARCHAR,
 		idUserTo INT,
-		text VARCHAR,
-		when_send TIME
+		text TEXT NOT NULL,
+		when_send TIMESTAMP DEFAULT NOW(),
+		FOREIGN KEY (idUserFrom) REFERENCES users (id) ON DELETE CASCADE,
+		FOREIGN KEY (idUserTo) REFERENCES users (id) ON DELETE CASCADE
 	)`
 	if _, err = db.Exec(query); err != nil {
 		log.Fatalf("Error with creating Messages table: %v", err)
@@ -57,17 +64,16 @@ func main() {
 
 	// Processing of connections, Grouping, and Validation
 	e := echo.New()
+	user_messageDB := &DataBase{DB: db}
 	api := e.Group("/api")
 	{
-		api.GET("/users", GETUser)
-		api.POST("/users", POSTUser)
-		api.PATCH("/update_user_name/:id", PATCHUserName)
-		api.DELETE("/user_delete", DELETEUser)
+		api.GET("/getUsers", user_messageDB.GETUser)
+		api.POST("/postUsers", user_messageDB.POSTUser)
+		api.PATCH("/update_user_name/:id", user_messageDB.PATCHUserName)
+		api.DELETE("/user_delete/:id", user_messageDB.DELETEUser)
 	}
 
 	e.Start(":5050")
-
-	e.Validator = &CustomValidator{validator: validator.New()}
 }
 
 // Struct and slice with data
@@ -75,12 +81,12 @@ func main() {
 type ReqisterData struct {
 	Name     string `json:"name"`
 	Password string `json:"password"`
-	Role     string `json:"role" validate:"required,oneof=admin user"`
+	Role     bool   `json:"role"`
+	ID       int
 }
 
 type Users struct {
 	ReqisterData
-	ID int
 }
 
 type UserRequest struct {
@@ -98,11 +104,10 @@ type Message struct {
 	Text          string `json:"text"`
 }
 
-var messagesMap = make(map[int]Message)
-
 // Other struct
-type CustomValidator struct {
-	validator *validator.Validate
+
+type DataBase struct {
+	DB *sql.DB
 }
 
 // Struct for answer
@@ -121,7 +126,8 @@ type AnswerForErrors struct {
 
 // Main CRUD User func
 
-func GETUser(c *echo.Context) error {
+func (db *DataBase) GETUser(c *echo.Context) error {
+
 	if c.Request().Method != "GET" {
 		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Error: "Can't be method exept GET"})
 	}
@@ -129,36 +135,34 @@ func GETUser(c *echo.Context) error {
 	if err := c.Bind(&users); err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad JSON"})
 	}
-	if users.Role == "admin" {
+	if users.Role {
 		return c.JSON(http.StatusOK, AnswerToUsers{Users: userMap})
 	} else {
 		return c.JSON(http.StatusOK, AnswerToUsers{You: users})
 	}
 }
 
-func POSTUser(c *echo.Context) error {
+func (db *DataBase) POSTUser(c *echo.Context) error {
 	if c.Request().Method != "POST" {
 		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Error: "Can't be method exept POST"})
 	}
-	var user Users
-	if err := c.Bind(&user); err != nil {
+	var regUser ReqisterData
+	if err := c.Bind(&regUser); err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Bad JSON"})
 	}
-	if err := c.Validate(&user); err != nil {
-		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: err.Error()})
-	}
-	id := rand.IntN(90000000)
-	user.ID = id
 
-	userLog, err := hashPassword(user.Password)
+	id := rand.IntN(99999999)
+	regUser.ID = id
+
+	userLog, err := hashPassword(regUser.Password)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Error: "Could not get a login"})
 	}
-	userMap[id] = user
+	db.DB.Exec(`INSERT INTO users (id,name,password,role) VALUES ($1,$2,$3,$4)`, regUser.ID, regUser.Name, regUser.Password, regUser.Role)
 	return c.JSON(http.StatusOK, AnswerToUsers{YourLogin: userLog, YourID: id, Message: "You were successfully register"})
 }
 
-func PATCHUserName(c *echo.Context) error {
+func (db *DataBase) PATCHUserName(c *echo.Context) error {
 	if c.Request().Method != "PATCH" {
 		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Error: "Can't be method exept PATCH"})
 	}
@@ -185,7 +189,7 @@ func PATCHUserName(c *echo.Context) error {
 	return c.JSON(http.StatusOK, AnswerToUsers{You: user, Message: "Name was successfully updated"})
 }
 
-func DELETEUser(c *echo.Context) error {
+func (db *DataBase) DELETEUser(c *echo.Context) error {
 	if c.Request().Method != "DELETE" {
 		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Error: "Can't be method exept DELETE"})
 	}
@@ -210,7 +214,7 @@ func DELETEUser(c *echo.Context) error {
 
 //Main Messages func
 
-func GETMessages(c *echo.Context) error {
+func (db *DataBase) GETMessages(c *echo.Context) error {
 	if c.Request().Method != "GET" {
 		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Error: "Can't be method exept GET"})
 	}
@@ -246,11 +250,4 @@ func hashPassword(password string) (string, error) {
 func checkLogin(login string, password string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(login), []byte(password))
 	return err == nil
-}
-
-func (cv *CustomValidator) Validate(i interface{}) error {
-	if err := cv.validator.Struct(i); err != nil {
-		return err
-	}
-	return nil
 }
