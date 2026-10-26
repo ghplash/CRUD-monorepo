@@ -34,9 +34,8 @@ func main() {
 	query := `
 	CREATE TABLE IF NOT EXISTS users (
 		id INT PRIMARY KEY,
-		username VARCHAR(50) UNIQUE,
-		password VARCHAR NOT NULL,
-		role BOOL DEFAULT false
+		username VARCHAR(50) UNIQUE NOT NULL,
+		password VARCHAR NOT NULL
 	)`
 	_, err = db.Exec(query)
 	if err != nil {
@@ -68,7 +67,7 @@ func main() {
 	user_messageDB := &DataBase{DB: db}
 	user := e.Group("/users")
 	{
-		user.GET("/checkProfile", user_messageDB.GETUser)
+		user.GET("/checkProfile/:id", user_messageDB.GETUser)
 		user.POST("/createUser", user_messageDB.POSTUser)
 		user.PATCH("/update_name/:id", user_messageDB.PATCHUserName)
 		user.DELETE("/delete_user/:id", user_messageDB.DELETEUser)
@@ -82,20 +81,13 @@ func main() {
 type ReqisterData struct {
 	Name     string `json:"name"`
 	Password string `json:"password"`
-	Role     bool   `json:"role"`
 	ID       int
-}
-
-type Users struct {
-	ReqisterData
 }
 
 type UserRequest struct {
 	Login string `json:"login"`
 	Name  string `json:"name"`
 }
-
-var userMap = make(map[int]Users)
 
 // Message struct
 type Message struct {
@@ -114,8 +106,7 @@ type DataBase struct {
 // Struct for answer
 
 type AnswerToUsers struct {
-	Users     map[int]Users
-	You       Users
+	YourName  string
 	YourLogin string
 	YourID    int
 	Message   string
@@ -129,19 +120,35 @@ type AnswerForErrors struct {
 // Main CRUD User func
 
 func (db *DataBase) GETUser(c *echo.Context) error {
-
 	if c.Request().Method != "GET" {
 		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Message: "Can't be method exept GET"})
 	}
-	var users Users
-	if err := c.Bind(&users); err != nil {
-		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad JSON", Error: err})
+	idParam := c.Param("id")
+	id, err := strconv.Atoi(idParam)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad id", Error: err})
 	}
-	if users.Role {
-		return c.JSON(http.StatusOK, AnswerToUsers{Users: userMap})
-	} else {
-		return c.JSON(http.StatusOK, AnswerToUsers{You: users})
+
+	var username string
+	var password string
+	rows, err := db.DB.Query(`SELECT password, username FROM users WHERE id = $1`, id)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with DB!", Error: err})
 	}
+	defer rows.Close()
+	if rows.Next() {
+		err = rows.Scan(&password, &username)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with find user in DB", Error: err})
+		}
+	}
+
+	login, err := hashPassword(password)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Error: err})
+	}
+
+	return c.JSON(http.StatusOK, AnswerToUsers{YourName: username, YourLogin: login, YourID: id})
 }
 
 func (db *DataBase) POSTUser(c *echo.Context) error {
@@ -160,8 +167,8 @@ func (db *DataBase) POSTUser(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Could not get a login", Error: err})
 	}
-	db.DB.Exec(`INSERT INTO users (id,name,password,role) VALUES ($1,$2,$3,$4)`, regUser.ID, regUser.Name, regUser.Password, regUser.Role)
-	return c.JSON(http.StatusOK, AnswerToUsers{YourLogin: userLog, YourID: id, Message: "You were successfully register"})
+	db.DB.Exec(`INSERT INTO users (id,name,password) VALUES ($1,$2,$3)`, regUser.ID, regUser.Name, regUser.Password)
+	return c.JSON(http.StatusOK, AnswerToUsers{YourName: regUser.Name, YourLogin: userLog, YourID: id, Message: "You were successfully register"})
 }
 
 func (db *DataBase) PATCHUserName(c *echo.Context) error {
@@ -218,8 +225,21 @@ func (db *DataBase) DELETEUser(c *echo.Context) error {
 	if err := c.Bind(&delUser); err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad JSON", Error: err})
 	}
-	delete(userMap, id)
 
+	var password string
+	rowErr := db.DB.QueryRowContext(context.Background(), `SELECT password FROM users WHERE id = $1`, id).Scan(password)
+	if rowErr != nil {
+		c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!", Error: err})
+	}
+
+	if ok := checkLogin(delUser.Login, password); !ok {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Incorrect login", Error: err})
+	}
+
+	query := `DELETE FROM users WHERE id = $1`
+	if _, err := db.DB.Exec(query, id); err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with deleting name", Error: err})
+	}
 	return c.JSON(http.StatusOK, AnswerToUsers{Message: "User was successfully deleted"})
 }
 
@@ -229,26 +249,7 @@ func (db *DataBase) GETMessages(c *echo.Context) error {
 	if c.Request().Method != "GET" {
 		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Message: "Can't be method exept GET"})
 	}
-	idParam := c.Param("id")
-	id, err := strconv.Atoi(idParam)
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad id", Error: err})
-	}
-
-	user, exist := userMap[id]
-	if !exist {
-		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No User with required ID", Error: err})
-	}
-
-	var userData UserRequest
-	if err := c.Bind(&userData); err != nil {
-		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad JSON", Error: err})
-	}
-
-	if ok := checkLogin(userData.Login, user.Password); !ok {
-		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad login", Error: err})
-	}
-	return c.JSON(http.StatusOK, AnswerToUsers{Message: "Hello"})
+	return c.JSON(http.StatusOK, AnswerToUsers{YourName: "YOOOOOO"})
 }
 
 // Other func
