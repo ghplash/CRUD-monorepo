@@ -92,9 +92,10 @@ type UserRequest struct {
 // Message struct
 
 type SendMessage struct {
-	idUserFrom int
-	idUserTo   int
-	text       string
+	IdUserFrom       int    `json:"idUserFrom"`
+	PasswordUserFrom string `json:"passwordUserFrom"`
+	IdUserTo         int    `json:"idUserTo"`
+	Text             string `json:"text"`
 }
 
 // Other struct
@@ -197,7 +198,7 @@ func (db *DataBase) PATCHUserName(c *echo.Context) error {
 	var userLog string
 	err = db.DB.QueryRowContext(context.Background(), `SELECT login FROM users WHERE id = $1`, id).Scan(&userLog)
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!"})
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!"})
 	} else if err != nil {
 		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!", Error: err.Error()})
 	}
@@ -254,14 +255,14 @@ func (db *DataBase) DELETEUser(c *echo.Context) error {
 
 //Main Messages func
 
-func (db *DataBase) GETMessages(c *echo.Context) error {
+func (db *DataBase) CheckMyMessageHistory(c *echo.Context) error {
 	if c.Request().Method != "GET" {
 		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Message: "Can't be method exept GET"})
 	}
 	return c.JSON(http.StatusOK, AnswerToUsers{YourName: "YOOOOOO"})
 }
 
-func (db *DataBase) POSTMessage(c *echo.Context) error {
+func (db *DataBase) SENDMessage(c *echo.Context) error {
 	if c.Request().Method != "POST" {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Only can be method POST"})
 	}
@@ -271,18 +272,70 @@ func (db *DataBase) POSTMessage(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad JSON", Error: err.Error()})
 	}
 
-	existFrom := db.checkUserInDB(newMessage.idUserFrom)
-	existTo := db.checkUserInDB(newMessage.idUserTo)
+	existFrom := db.checkUserInDB(newMessage.IdUserFrom)
+	existTo := db.checkUserInDB(newMessage.IdUserTo)
 	if !existFrom || !existTo {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Cannot find users with required id, check it!"})
 	}
 
-	_, err := db.DB.Exec(`INSERT INTO messages (idUserFrom, idUserTo, text) VALUES ($1, $2, $3)`, newMessage.idUserFrom, newMessage.idUserTo, newMessage.text)
+	var loginFrom string
+	err := db.DB.QueryRowContext(context.Background(), `SELECT login FROM users WHERE id = $1`, newMessage.IdUserFrom).Scan(&loginFrom)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!"})
+		} else {
+			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!", Error: err.Error()})
+		}
+	}
+
+	if ok := checkLogin(loginFrom, newMessage.PasswordUserFrom); !ok {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Incorect password!"})
+	}
+
+	_, err = db.DB.Exec(`INSERT INTO messages (idUserFrom, idUserTo, text) VALUES ($1, $2, $3)`, newMessage.IdUserFrom, newMessage.IdUserTo, newMessage.Text)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with added data in DB", Error: err.Error()})
 	}
 
 	return c.JSON(http.StatusOK, ResponseForMessages{Message: "Message was successfully sended!", YourMessage: newMessage})
+}
+
+func (db *DataBase) UPGRADEMessage(c *echo.Context) error {
+	if c.Request().Method != "POST" {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Only can be method POST"})
+	}
+
+	var newMessage SendMessage
+	if err := c.Bind(&newMessage); err != nil {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad JSON", Error: err.Error()})
+	}
+
+	existFrom := db.checkUserInDB(newMessage.IdUserFrom)
+	existTo := db.checkUserInDB(newMessage.IdUserTo)
+	if !existFrom || !existTo {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Cannot find users with required id, check it!"})
+	}
+
+	var loginFrom string
+	err := db.DB.QueryRowContext(context.Background(), `SELECT login FROM users WHERE id = $1`, newMessage.IdUserFrom).Scan(&loginFrom)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!"})
+		} else {
+			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!", Error: err.Error()})
+		}
+	}
+
+	if ok := checkLogin(loginFrom, newMessage.PasswordUserFrom); !ok {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Incorect password!"})
+	}
+
+	_, err = db.DB.Exec(`UPDATE messages SET text = $1, when_send = NOW() WHERE idUserFrom = $2`, newMessage.Text, newMessage.IdUserFrom)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with update message!", Error: err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, ResponseForMessages{Message: "Message was successfully updated!", YourMessage: newMessage})
 }
 
 // Other func
