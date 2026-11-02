@@ -31,6 +31,11 @@ func main() {
 
 	// Creating users table
 
+	//_, err = db.Exec(`DROP TABLE users CASCADE`)
+	//if err != nil {
+	//	log.Fatalf("Error with deleting users table: %v", err)
+	//}
+
 	query := `
 	CREATE TABLE IF NOT EXISTS users (
 		id INT PRIMARY KEY,
@@ -45,6 +50,11 @@ func main() {
 	log.Println("Users table was successfully created!")
 
 	// Creating messages table
+
+	//_, err = db.Exec(`DROP TABLE messages`)
+	//if err != nil {
+	//	log.Fatalf("Error with deleting messages table: %v", err)
+	//}
 
 	query = `
 	CREATE TABLE IF NOT EXISTS messages (
@@ -96,6 +106,13 @@ type SendMessage struct {
 	PasswordUserFrom string `json:"passwordUserFrom"`
 	IdUserTo         int    `json:"idUserTo"`
 	Text             string `json:"text"`
+	MessageId        int
+}
+
+type ShowMessage struct {
+	IdUserFrom int
+	IdUserTo   int
+	Limit      int
 }
 
 // Other struct
@@ -166,9 +183,12 @@ func (db *DataBase) POSTUser(c *echo.Context) error {
 	id := rand.IntN(99999999)
 	regUser.ID = id
 
+	if len(regUser.Password) <= 10 || len(regUser.Password) >= 20 {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "The password length cannot be less than 12 or more than 20"})
+	}
 	userLog, err := hashPassword(regUser.Password)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Could not get a login", Error: err.Error()})
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Could not create a login", Error: err.Error()})
 	}
 	_, err = db.DB.Exec(`INSERT INTO users (id, username, login) VALUES ($1,$2,$3)`, regUser.ID, regUser.Name, userLog)
 	if err != nil {
@@ -198,9 +218,9 @@ func (db *DataBase) PATCHUserName(c *echo.Context) error {
 	var userLog string
 	err = db.DB.QueryRowContext(context.Background(), `SELECT login FROM users WHERE id = $1`, id).Scan(&userLog)
 	if err == sql.ErrNoRows {
-		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!"})
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No password in DB, error no rows"})
 	} else if err != nil {
-		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!", Error: err.Error()})
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No password in DB", Error: err.Error()})
 	}
 
 	if ok := checkLogin(userLog, upgUser.Password); !ok {
@@ -225,21 +245,21 @@ func (db *DataBase) DELETEUser(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad id", Error: err.Error()})
 	}
 
-	if exist := db.checkUserInDB(id); !exist {
-		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No user in DB with required ID,check it!"})
-	}
-
 	var delUser UserRequest
 	if err := c.Bind(&delUser); err != nil {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad JSON"})
 	}
 
+	if exist := db.checkUserInDB(id); !exist {
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No user in DB with required ID,check it!"})
+	}
+
 	var userLog string
 	err = db.DB.QueryRowContext(context.Background(), `SELECT login FROM users WHERE id = $1`, id).Scan(&userLog)
 	if err == sql.ErrNoRows {
-		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with DB in selection password!"})
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No password in DB, error no rows"})
 	} else if err != nil {
-		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with DB", Error: err.Error()})
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No password in DB", Error: err.Error()})
 	}
 
 	if ok := checkLogin(userLog, delUser.Password); !ok {
@@ -248,7 +268,7 @@ func (db *DataBase) DELETEUser(c *echo.Context) error {
 
 	query := `DELETE FROM users WHERE id = $1`
 	if _, err := db.DB.Exec(query, id); err != nil {
-		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with deleting name", Error: err.Error()})
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with deleting user", Error: err.Error()})
 	}
 	return c.JSON(http.StatusOK, AnswerToUsers{Message: "User was successfully deleted"})
 }
@@ -259,7 +279,15 @@ func (db *DataBase) CheckMyMessageHistory(c *echo.Context) error {
 	if c.Request().Method != "GET" {
 		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Message: "Can't be method exept GET"})
 	}
-	return c.JSON(http.StatusOK, AnswerToUsers{YourName: "YOOOOOO"})
+
+	idParam := c.Param("id")
+	idUserFrom, err := strconv.Atoi(idParam)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad ID"})
+	}
+
+	var messagesArr []ShowMessages
+
 }
 
 func (db *DataBase) SENDMessage(c *echo.Context) error {
@@ -282,9 +310,9 @@ func (db *DataBase) SENDMessage(c *echo.Context) error {
 	err := db.DB.QueryRowContext(context.Background(), `SELECT login FROM users WHERE id = $1`, newMessage.IdUserFrom).Scan(&loginFrom)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!"})
+			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No password in DB, error no rows"})
 		} else {
-			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!", Error: err.Error()})
+			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No password in DB", Error: err.Error()})
 		}
 	}
 
@@ -292,9 +320,13 @@ func (db *DataBase) SENDMessage(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Incorect password!"})
 	}
 
-	_, err = db.DB.Exec(`INSERT INTO messages (idUserFrom, idUserTo, text) VALUES ($1, $2, $3)`, newMessage.IdUserFrom, newMessage.IdUserTo, newMessage.Text)
+	err = db.DB.QueryRowContext(c.Request().Context(), `
+	INSERT INTO messages (idUserFrom, idUserTo, text)
+	VALUES ($1, $2, $3)
+	RETURNING messageId`, newMessage.IdUserFrom, newMessage.IdUserTo, newMessage.Text).Scan(&newMessage.MessageId)
+
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with added data in DB", Error: err.Error()})
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with returning messageId", Error: err.Error()})
 	}
 
 	return c.JSON(http.StatusOK, ResponseForMessages{Message: "Message was successfully sended!", YourMessage: newMessage})
@@ -320,9 +352,9 @@ func (db *DataBase) UPGRADEMessage(c *echo.Context) error {
 	err := db.DB.QueryRowContext(context.Background(), `SELECT login FROM users WHERE id = $1`, newMessage.IdUserFrom).Scan(&loginFrom)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!"})
+			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No password in DB, error no rows"})
 		} else {
-			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "Error with password,check it!", Error: err.Error()})
+			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No password in DB", Error: err.Error()})
 		}
 	}
 
@@ -332,10 +364,30 @@ func (db *DataBase) UPGRADEMessage(c *echo.Context) error {
 
 	_, err = db.DB.Exec(`UPDATE messages SET text = $1, when_send = NOW() WHERE idUserFrom = $2`, newMessage.Text, newMessage.IdUserFrom)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with update message!", Error: err.Error()})
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with updating message!", Error: err.Error()})
 	}
 
 	return c.JSON(http.StatusOK, ResponseForMessages{Message: "Message was successfully updated!", YourMessage: newMessage})
+}
+
+func (db *DataBase) DELETEMessage(c *echo.Context) error {
+	if c.Request().Method != "DELETE" {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Only can be method DELETE"})
+	}
+
+	idParam := c.Param("messageId")
+	messageId, err := strconv.Atoi(idParam)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad ID"})
+	}
+
+	_, err = db.DB.Exec(`DELETE FROM messages WHERE messageId = $1`, messageId)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with deleting user", Error: err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, AnswerToUsers{Message: "Message was successfully deleted"})
+
 }
 
 // Other func
