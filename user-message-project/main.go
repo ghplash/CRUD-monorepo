@@ -83,6 +83,14 @@ func main() {
 		user.DELETE("/delete_user/:id", user_messageDB.DELETEUser)
 	}
 
+	messages := e.Group("/messages")
+	{
+		messages.GET("/checkHistory", user_messageDB.CheckMyMessageHistory)
+		messages.POST("/sendMessage", user_messageDB.SENDMessage)
+		messages.PATCH("/updateMessage/:messageId", user_messageDB.UPGRADEMessage)
+		messages.DELETE("/deleteMessage/:messageId", user_messageDB.DELETEMessage)
+	}
+
 	e.Start(":5050")
 }
 
@@ -109,10 +117,10 @@ type SendMessage struct {
 	MessageId        int
 }
 
-type ShowMessage struct {
-	IdUserFrom int
-	IdUserTo   int
-	Limit      int
+type MessageRequest struct {
+	IdUserFrom int `json:"idUserFrom"`
+	IdUserTo   int `json:"idUserTo"`
+	Limit      int `json:"limit"`
 }
 
 // Other struct
@@ -168,7 +176,7 @@ func (db *DataBase) GETUser(c *echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Error: err.Error()})
 	}
 
-	return c.JSON(http.StatusOK, AnswerToUsers{YourName: username, YourID: id})
+	return c.JSON(http.StatusOK, AnswerToUsers{YourName: username, YourID: id, Message: "Here is your profile"})
 }
 
 func (db *DataBase) POSTUser(c *echo.Context) error {
@@ -211,12 +219,14 @@ func (db *DataBase) PATCHUserName(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad JSON", Error: err.Error()})
 	}
 
-	if exist := db.checkUserInDB(id); !exist {
-		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No user in DB with required ID,check it!"})
+	exist, err := db.checkUserInDB(id)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error in DB with finding user", Error: err.Error()})
+	} else if !exist {
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No user in DB with required Id"})
 	}
-
 	var userLog string
-	err = db.DB.QueryRowContext(context.Background(), `SELECT login FROM users WHERE id = $1`, id).Scan(&userLog)
+	err = db.DB.QueryRowContext(c.Request().Context(), `SELECT login FROM users WHERE id = $1`, id).Scan(&userLog)
 	if err == sql.ErrNoRows {
 		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No password in DB, error no rows"})
 	} else if err != nil {
@@ -250,12 +260,15 @@ func (db *DataBase) DELETEUser(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad JSON"})
 	}
 
-	if exist := db.checkUserInDB(id); !exist {
-		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No user in DB with required ID,check it!"})
+	exist, err := db.checkUserInDB(id)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error in DB with finding user", Error: err.Error()})
+	} else if !exist {
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No user in DB with required Id"})
 	}
 
 	var userLog string
-	err = db.DB.QueryRowContext(context.Background(), `SELECT login FROM users WHERE id = $1`, id).Scan(&userLog)
+	err = db.DB.QueryRowContext(c.Request().Context(), `SELECT login FROM users WHERE id = $1`, id).Scan(&userLog)
 	if err == sql.ErrNoRows {
 		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No password in DB, error no rows"})
 	} else if err != nil {
@@ -280,14 +293,50 @@ func (db *DataBase) CheckMyMessageHistory(c *echo.Context) error {
 		return c.JSON(http.StatusMethodNotAllowed, AnswerForErrors{Message: "Can't be method exept GET"})
 	}
 
-	idParam := c.Param("id")
-	idUserFrom, err := strconv.Atoi(idParam)
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad ID"})
+	var messageReq MessageRequest
+	if err := c.Bind(&messageReq); err != nil {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad JSON"})
 	}
 
-	var messagesArr []ShowMessages
+	existFrom, err := db.checkUserInDB(messageReq.IdUserFrom)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error in DB with finding user", Error: err.Error()})
+	} else if !existFrom {
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No userFrom in DB with required Id"})
+	}
+	existTo, err := db.checkUserInDB(messageReq.IdUserTo)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error in DB with finding user", Error: err.Error()})
+	} else if !existTo {
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No userTo in DB with required Id"})
+	}
 
+	rows, err := db.DB.Query(`
+	SELECT text FROM messages WHERE idUserFrom = $1 AND idUserTo = $2
+	ORDER BY when_send DESC
+	LIMIT $3`, messageReq.IdUserFrom, messageReq.IdUserTo, messageReq.Limit)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with selecting messages, error no rows"})
+		}
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with selecting messages", Error: err.Error()})
+	}
+	defer rows.Close()
+	var messages []string
+	for rows.Next() {
+		var text string
+		err := rows.Scan(&text)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error witn scanning messages", Error: err.Error()})
+		}
+		messages = append(messages, text)
+	}
+	if err = rows.Err(); err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Error: err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, messages)
 }
 
 func (db *DataBase) SENDMessage(c *echo.Context) error {
@@ -300,14 +349,21 @@ func (db *DataBase) SENDMessage(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad JSON", Error: err.Error()})
 	}
 
-	existFrom := db.checkUserInDB(newMessage.IdUserFrom)
-	existTo := db.checkUserInDB(newMessage.IdUserTo)
-	if !existFrom || !existTo {
-		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Cannot find users with required id, check it!"})
+	existFrom, err := db.checkUserInDB(newMessage.IdUserFrom)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error in DB with finding user", Error: err.Error()})
+	} else if !existFrom {
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No userFrom in DB with required Id"})
+	}
+	existTo, err := db.checkUserInDB(newMessage.IdUserTo)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error in DB with finding user", Error: err.Error()})
+	} else if !existTo {
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No userTo in DB with required Id"})
 	}
 
 	var loginFrom string
-	err := db.DB.QueryRowContext(context.Background(), `SELECT login FROM users WHERE id = $1`, newMessage.IdUserFrom).Scan(&loginFrom)
+	err = db.DB.QueryRowContext(c.Request().Context(), `SELECT login FROM users WHERE id = $1`, newMessage.IdUserFrom).Scan(&loginFrom)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No password in DB, error no rows"})
@@ -333,8 +389,14 @@ func (db *DataBase) SENDMessage(c *echo.Context) error {
 }
 
 func (db *DataBase) UPGRADEMessage(c *echo.Context) error {
-	if c.Request().Method != "POST" {
+	if c.Request().Method != "PATCH" {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Only can be method POST"})
+	}
+
+	idParam := c.Param("messageId")
+	messageId, err := strconv.Atoi(idParam)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad ID"})
 	}
 
 	var newMessage SendMessage
@@ -342,14 +404,21 @@ func (db *DataBase) UPGRADEMessage(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Bad JSON", Error: err.Error()})
 	}
 
-	existFrom := db.checkUserInDB(newMessage.IdUserFrom)
-	existTo := db.checkUserInDB(newMessage.IdUserTo)
-	if !existFrom || !existTo {
-		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Cannot find users with required id, check it!"})
+	existFrom, err := db.checkUserInDB(newMessage.IdUserFrom)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error in DB with finding user", Error: err.Error()})
+	} else if !existFrom {
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No userFrom in DB with required Id"})
+	}
+	existTo, err := db.checkUserInDB(newMessage.IdUserTo)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error in DB with finding user", Error: err.Error()})
+	} else if !existTo {
+		return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No userTo in DB with required Id"})
 	}
 
 	var loginFrom string
-	err := db.DB.QueryRowContext(context.Background(), `SELECT login FROM users WHERE id = $1`, newMessage.IdUserFrom).Scan(&loginFrom)
+	err = db.DB.QueryRowContext(c.Request().Context(), `SELECT login FROM users WHERE id = $1`, newMessage.IdUserFrom).Scan(&loginFrom)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return c.JSON(http.StatusNotFound, AnswerForErrors{Message: "No password in DB, error no rows"})
@@ -362,7 +431,7 @@ func (db *DataBase) UPGRADEMessage(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, AnswerForErrors{Message: "Incorect password!"})
 	}
 
-	_, err = db.DB.Exec(`UPDATE messages SET text = $1, when_send = NOW() WHERE idUserFrom = $2`, newMessage.Text, newMessage.IdUserFrom)
+	_, err = db.DB.Exec(`UPDATE messages SET text = $1, when_send = NOW() WHERE messageId = $2`, newMessage.Text, messageId)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, AnswerForErrors{Message: "Error with updating message!", Error: err.Error()})
 	}
@@ -402,12 +471,12 @@ func checkLogin(login string, password string) bool {
 	return err == nil
 }
 
-func (db *DataBase) checkUserInDB(userID int) bool {
+func (db *DataBase) checkUserInDB(userID int) (bool, error) {
 	query := `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`
 	var exist bool
 	err := db.DB.QueryRowContext(context.Background(), query, userID).Scan(&exist)
 	if err != nil {
-		return false
+		return false, err
 	}
-	return exist
+	return exist, nil
 }
